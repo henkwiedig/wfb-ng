@@ -885,11 +885,13 @@ void Aggregator::send_packet(int ring_idx, int fragment_idx)
     else if(!(flags & WFB_PACKET_FEC_ONLY))
     {
 
-        if(saddr.sin_family != 0)
-            sendto(sockfd, payload, packet_size, MSG_DONTWAIT, (sockaddr*)&saddr, sizeof(saddr));
-
-        if(uaddr.sun_path[0] != '\0')
+        if (uaddr.sun_path[0] != '\0') {
+            // Unix domain socket mode - only send to Unix socket
             sendto(sockfd, payload, packet_size, MSG_DONTWAIT, (sockaddr*)&uaddr, sizeof(uaddr));
+        } else if (saddr.sin_family != 0) {
+            // Network socket mode - only send to network socket
+            sendto(sockfd, payload, packet_size, MSG_DONTWAIT, (sockaddr*)&saddr, sizeof(saddr));
+        }
 
         count_p_outgoing += 1;
         count_b_outgoing += packet_size;
