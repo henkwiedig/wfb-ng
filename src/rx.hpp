@@ -20,6 +20,7 @@
 #include <unordered_map>
 #include <stdint.h>
 #include <sys/socket.h>
+#include <sys/un.h>
 #include <netinet/in.h>
 #include <arpa/inet.h>
 #include <stdio.h>
@@ -34,6 +35,7 @@
 
 typedef enum {
     LOCAL,
+    LOCAL_UNIX,
     FORWARDER,
     AGGREGATOR
 } rx_mode_t;
@@ -160,6 +162,7 @@ class Aggregator : public BaseAggregator
 {
 public:
     Aggregator(const std::string &client_addr, int client_port, const std::string &keypair, uint64_t epoch, uint32_t channel_id);
+    Aggregator(const std::string &client_addr, char *unix_socket, const std::string &keypair, uint64_t epoch, uint32_t channel_id);
     virtual ~Aggregator();
     virtual void process_packet(const uint8_t *buf, size_t size, uint8_t wlan_idx, const uint8_t *antenna,
                                 const int8_t *rssi, const int8_t *noise, uint16_t freq, uint8_t mcs_index,
@@ -218,6 +221,7 @@ private:
     int fec_n;  // RS total number of fragments in block
     int sockfd;
     struct sockaddr_in saddr;
+    struct sockaddr_un uaddr;
     uint32_t seq;
     rx_ring_item_t rx_ring[RX_RING_SIZE];
     int rx_ring_front; // current packet

@@ -136,22 +136,35 @@ def init_udp_direct_rx(service_name, cfg, wlans, link_id, ant_sel_f, is_cluster,
 
     m = connect_re.match(cfg.peer)
     connect = m.group('addr'), int(m.group('port'))
-    log.msg('Send %s stream %d to %s:%d' % (service_name, cfg.stream_rx, connect[0], connect[1]))
+    
+    # Base command parts
+    cmd_parts = {
+        'cmd': os.path.join(settings.path.bin_dir, 'wfb_rx'),
+        'cluster': ' -a %d' % (cfg.udp_port_auto,) if is_cluster else '',
+        'stream': cfg.stream_rx,
+        'key': os.path.join(settings.path.conf_dir, cfg.keypair),
+        'rcv_buf_size': settings.common.tx_rcv_buf_size,
+        'log_interval': settings.common.log_interval,
+        'link_id': link_id
+    }
 
-    cmd = ('%(cmd)s%(cluster)s -p %(stream)d -c %(ip_addr)s -u %(port)d -K %(key)s -R %(rcv_buf_size)d -l %(log_interval)d -i %(link_id)d' % \
-           dict(cmd=os.path.join(settings.path.bin_dir, 'wfb_rx'),
-                cluster=' -a %d' % (cfg.udp_port_auto,) if is_cluster else '',
-                stream=cfg.stream_rx,
-                ip_addr=connect[0],
-                port=connect[1],
-                key=os.path.join(settings.path.conf_dir, cfg.keypair),
-                rcv_buf_size=settings.common.tx_rcv_buf_size,
-                log_interval=settings.common.log_interval,
-                link_id=link_id)).split() + (wlans if not is_cluster else [])
+    # Add either -c/-u or -U depending on out_socket
+    if cfg.out_socket is not None:
+        cmd_template = '%(cmd)s%(cluster)s -p %(stream)d -U %(out_socket)s -K %(key)s -R %(rcv_buf_size)d -l %(log_interval)d -i %(link_id)d'
+        cmd_parts['out_socket'] = cfg.out_socket
+        log.msg('Send %s stream %d to local socket %s' % (service_name, cfg.stream_rx, cfg.out_socket))
+    else:
+        cmd_template = '%(cmd)s%(cluster)s -p %(stream)d -c %(ip_addr)s -u %(port)d -K %(key)s -R %(rcv_buf_size)d -l %(log_interval)d -i %(link_id)d'
+        cmd_parts['ip_addr'] = connect[0]
+        cmd_parts['port'] = connect[1]
+        log.msg('Send %s stream %d to %s:%d' % (service_name, cfg.stream_rx, connect[0], connect[1]))
+
+    cmd = cmd_template % cmd_parts
+    cmd = cmd.split() + (wlans if not is_cluster else [])
 
     df = RXProtocol(ant_sel_f, cmd, '%s rx' % (service_name,)).start()
 
-    log.msg('%s: %s' % (service_name, ' '.join(cmd),))
+    log.msg('%s: %s' % (service_name, ' '.join(cmd)))
     return df
 
 

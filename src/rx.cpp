@@ -298,6 +298,42 @@ Aggregator::Aggregator(const string &client_addr, int client_port, const string 
     fclose(fp);
 }
 
+Aggregator::Aggregator(const string &client_addr, char *unix_socket , const string &keypair, uint64_t epoch, uint32_t channel_id) : \
+    count_p_all(0), count_b_all(0), count_p_dec_err(0), count_p_session(0), count_p_data(0), count_p_fec_recovered(0),
+    count_p_lost(0), count_p_bad(0), count_p_override(0), count_p_outgoing(0), count_b_outgoing(0),
+    fec_p(NULL), fec_k(-1), fec_n(-1), seq(0), rx_ring{}, rx_ring_front(0), rx_ring_alloc(0),
+    last_known_block((uint64_t)-1), epoch(epoch), channel_id(channel_id)
+{
+    sockfd = socket(AF_UNIX, SOCK_DGRAM, 0);
+    if (sockfd < 0) throw std::runtime_error(string_format("Error opening socket: %s", strerror(errno)));
+
+    memset(&uaddr, '\0', sizeof(uaddr));
+    uaddr.sun_family = AF_UNIX;
+    strcpy(uaddr.sun_path, unix_socket);
+
+    memset(&saddr, '\0', sizeof(saddr));
+    saddr.sin_family = AF_UNIX;
+
+    memset(session_key, '\0', sizeof(session_key));
+
+    FILE *fp;
+    if((fp = fopen(keypair.c_str(), "r")) == NULL)
+    {
+        throw runtime_error(string_format("Unable to open %s: %s", keypair.c_str(), strerror(errno)));
+    }
+    if (fread(rx_secretkey, crypto_box_SECRETKEYBYTES, 1, fp) != 1)
+    {
+        fclose(fp);
+        throw runtime_error(string_format("Unable to read rx secret key: %s", strerror(errno)));
+    }
+    if (fread(tx_publickey, crypto_box_PUBLICKEYBYTES, 1, fp) != 1)
+    {
+        fclose(fp);
+        throw runtime_error(string_format("Unable to read tx public key: %s", strerror(errno)));
+    }
+    fclose(fp);
+}
+
 
 Aggregator::~Aggregator()
 {
@@ -848,7 +884,13 @@ void Aggregator::send_packet(int ring_idx, int fragment_idx)
     }
     else if(!(flags & WFB_PACKET_FEC_ONLY))
     {
-        sendto(sockfd, payload, packet_size, MSG_DONTWAIT, (sockaddr*)&saddr, sizeof(saddr));
+
+        if(saddr.sin_family != 0)
+            sendto(sockfd, payload, packet_size, MSG_DONTWAIT, (sockaddr*)&saddr, sizeof(saddr));
+
+        if(uaddr.sun_path[0] != '\0')
+            sendto(sockfd, payload, packet_size, MSG_DONTWAIT, (sockaddr*)&uaddr, sizeof(uaddr));
+
         count_p_outgoing += 1;
         count_b_outgoing += packet_size;
     }
@@ -1041,11 +1083,12 @@ int main(int argc, char* const *argv)
     int srv_port = 0;
     string client_addr = "127.0.0.1";
     rx_mode_t rx_mode = LOCAL;
+    char *unix_socket = NULL;
     int rcv_buf = 0;
 
     string keypair = "rx.key";
 
-    while ((opt = getopt(argc, argv, "K:fa:c:u:p:l:i:e:R:")) != -1) {
+    while ((opt = getopt(argc, argv, "K:fa:c:u:U:p:l:i:e:R:")) != -1) {
         switch (opt) {
         case 'K':
             keypair = optarg;
@@ -1062,6 +1105,10 @@ int main(int argc, char* const *argv)
             break;
         case 'u':
             client_port = atoi(optarg);
+            break;
+        case 'U':
+            rx_mode = LOCAL_UNIX;
+            unix_socket = optarg;
             break;
         case 'p':
             radio_port = atoi(optarg);
@@ -1080,7 +1127,7 @@ int main(int argc, char* const *argv)
             break;
         default: /* '?' */
         show_usage:
-            WFB_INFO("Local receiver: %s [-K rx_key] [-c client_addr] [-u client_port] [-p radio_port] [-R rcv_buf] [-l log_interval] [-e epoch] [-i link_id] interface1 [interface2] ...\n", argv[0]);
+            WFB_INFO("Local receiver: %s [-K rx_key] [-c client_addr] { [-u client_port] | [-U unix_socket] } [-p radio_port] [-R rcv_buf] [-l log_interval] [-e epoch] [-i link_id] interface1 [interface2] ...\n", argv[0]);
             WFB_INFO("Remote (forwarder): %s -f [-c client_addr] [-u client_port] [-p radio_port]  [-R rcv_buf] [-i link_id] interface1 [interface2] ...\n", argv[0]);
             WFB_INFO("Remote (aggregator): %s -a server_port [-K rx_key] [-c client_addr] [-R rcv_buf] [-u client_port] [-l log_interval] [-p radio_port] [-e epoch] [-i link_id]\n", argv[0]);
             WFB_INFO("Default: K='%s', connect=%s:%d, link_id=0x%06x, radio_port=%u, epoch=%" PRIu64 ", log_interval=%d, rcv_buf=system_default\n", keypair.c_str(), client_addr.c_str(), client_port, link_id, radio_port, epoch, log_interval);
@@ -1114,15 +1161,25 @@ int main(int argc, char* const *argv)
     try
     {
         uint32_t channel_id = (link_id << 8) + radio_port;
-        if (rx_mode == LOCAL || rx_mode == FORWARDER)
+        if (rx_mode == LOCAL || rx_mode == LOCAL_UNIX || rx_mode == FORWARDER)
         {
             if (optind >= argc) goto show_usage;
 
             unique_ptr<BaseAggregator> agg;
-            if(rx_mode == LOCAL){
+
+            switch (rx_mode)
+            {
+            case LOCAL:
                 agg = unique_ptr<Aggregator>(new Aggregator(client_addr, client_port, keypair, epoch, channel_id));
-            }else{
+                break;
+
+            case LOCAL_UNIX:
+                agg = unique_ptr<Aggregator>(new Aggregator(client_addr, unix_socket, keypair, epoch, channel_id));
+                break;
+
+            default:
                 agg = unique_ptr<Forwarder>(new Forwarder(client_addr, client_port));
+                break;
             }
 
             radio_loop(argc, argv, optind, channel_id, agg, log_interval, rcv_buf);
